@@ -2,11 +2,18 @@ use std::fs;
 use std::process::{Command};
 use std::path::{Path, PathBuf};
 use std::io::Write;
+use serde::{Deserialize};
 
 static DEBUG: bool = true;
 
+static REPOSITORY_NAME : &str = "changelog2";
+
 fn main() {
     let mut log_file = open_log();
+    if log_file.is_none() {
+        panic!("failed to open log file");
+    };
+    log(&mut log_file, "opened log...");
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     
     let dir_iter = std::fs::read_dir(manifest_dir);
@@ -15,45 +22,53 @@ fn main() {
         return;
     }
     
+    log(&mut log_file, "creating directory...");
     // Create a directory to store the changelog files
     let changelog_path = Path::new(manifest_dir).join(PathBuf::from("changelog"));
     // Will error if the directory already exists, but that's okay; we'll just ignore it.
     let created = std::fs::create_dir(changelog_path.clone());
     if !created.is_err() {
         // Initialize the git repo
-        let init = Command::new("git")
-                                    .args(["init"])
-                                    .current_dir(changelog_path.clone())
-                                    .output()
-                                    .expect("failed to execute git init");
+       Command::new("git")
+                .args(["init"])
+                .current_dir(changelog_path.clone())
+                .output()
+                .expect("failed to execute git init");
+
+        let config = read_config(&mut log_file);
+        if config.is_none() {
+            panic!("failed to read config");
+        }
+ 
+        let repo = "https://git.goto.ucsd.edu/".to_owned() + &config.unwrap().participant_id.to_owned() + "/" + REPOSITORY_NAME + ".git";
+ 
+        Command::new("git")
+                .args(["remote", "add", "origin", &repo])
+                .current_dir(changelog_path.clone())
+                .output()
+                .expect("failed to execute git remote add");
+ 
     }
     
+    log(&mut log_file, "copying files...");
     copy_files_to_changelog(&mut log_file, dir_iter.unwrap(), &changelog_path);
 
+    log(&mut log_file, "committing to git...");
     commit_to_git(&mut log_file, &changelog_path);
 
-    // just logging
-    let err = fs::write("/tmp/foo.txt", manifest_dir);
-    match err {
-        Ok(_) => println!("ok"),
-        Err(e) => println!("err: {}", e),
-    }
+    log(&mut log_file, "pushing...");
+    git_push(&mut log_file, &changelog_path);
 }
 
 fn copy_files_to_changelog(log_file: &mut Option<std::fs::File>, dir_iter: std::fs::ReadDir, changelog_path: &PathBuf) {
     let manifest_path = Path::new(env!("CARGO_MANIFEST_DIR"));
 
-
     for (_i, entry) in dir_iter.enumerate() {
         if entry.is_ok() {
+
             let dir_entry = entry.unwrap();
-            if dir_entry.path().is_dir() { // this is a directory
-                if !dir_entry.path().ends_with(".git") {
-                    let iterator = std::fs::read_dir(dir_entry.path());
-                    copy_files_to_changelog(log_file, iterator.unwrap(), changelog_path);
-                }
-            }
-            else { // this is just a file
+
+            if !dir_entry.path().ends_with(".git") {
                 let path = dir_entry.path();
                 let pruned_path = path.strip_prefix(manifest_path);
                 // log(log_file, pruned_path.clone().unwrap().to_str().unwrap());
@@ -69,16 +84,33 @@ fn copy_files_to_changelog(log_file: &mut Option<std::fs::File>, dir_iter: std::
                     log(log_file, path.to_str().unwrap());
 
                     let stripped_prefix = path.strip_prefix(manifest_path);
-                    if stripped_prefix.is_ok() {
-                        let dest_path = changelog_path.join(stripped_prefix.unwrap());
+                    if stripped_prefix.is_err() {
+                        continue;
+                    }
+
+                    let dest_path = changelog_path.join(stripped_prefix.unwrap());
+                    
+                    if dir_entry.path().is_dir() { // this is a directory
+                        let inner_iterator = std::fs::read_dir(dir_entry.path());
+                        // maybe create a directory
+                        let creation_err = std::fs::DirBuilder::new().create(dest_path);       
+                        if creation_err.is_err() {
+                            // do nothing; errors are expected for dirs that aren't new
+                        }                 
+
+                        copy_files_to_changelog(log_file, inner_iterator.unwrap(), changelog_path);
+                    }
+                    else { // this is a file
                         //log(log_file, dest_path.to_str().unwrap());
                         let copy_result = std::fs::copy(&path, dest_path);
                         if copy_result.is_err() {
-                            println!("failed to copy file: {}", copy_result.as_ref().err().unwrap());
+                            log(log_file, "failed to copy file: ");
+                            log(log_file, &copy_result.as_ref().err().unwrap().to_string());
                             let err_text = copy_result.err().unwrap().to_string();
                             log(log_file, &err_text);
                         }
                     }
+                    
                 }
             }                                
         }
@@ -102,6 +134,7 @@ fn commit_to_git(log_file: &mut Option<std::fs::File>, changelog_path: &PathBuf)
                                  .expect("failed to execute git add");
     if !commit.status.success() {
         log(log_file, "failed to commit files to git");
+        log(log_file, &commit.status.to_string());
     }
 }
 
@@ -129,4 +162,47 @@ fn log(log_file: &mut Option<std::fs::File>, msg: &str) {
             Err(e) => println!("err: {}", e),
         }
     }
+    else {
+        panic!("failed to write log");
+    }
+}
+
+#[derive(Deserialize)]
+struct Config {
+    participant_id: String,
+    git_password: String,
+}
+
+fn read_config(log_file: &mut Option<std::fs::File>) -> Option<Config> {
+       // read config.json
+       let config_file = fs::File::open("config.json");
+       if config_file.is_err() {
+           log(log_file, "failed to open config.json");
+           return None;
+       }
+       let reader = std::io::BufReader::new(config_file.unwrap());
+   
+       let v = serde_json::from_reader(reader);
+   
+       if v.is_err() {
+           let str = std::format!("failed to parse config.json: {}", v.err().unwrap());
+           log(log_file, &str);
+           return None;
+       }
+   
+        Some (v.unwrap())
+}
+
+// Pushes any committed changes to the remote server.
+fn git_push(log_file: &mut Option<std::fs::File>, changelog_path: &PathBuf) {
+    let push_success = Command::new("git")
+                .args(["push", "--set-upstream", "origin", "main"])
+                .current_dir(changelog_path)
+                .output();
+    
+    if push_success.is_err() {
+        log(log_file, "failed to push");
+        log(log_file, &push_success.err().unwrap().to_string());
+    }
+
 }
