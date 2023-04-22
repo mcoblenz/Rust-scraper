@@ -6,7 +6,7 @@ use serde::{Deserialize};
 
 static DEBUG: bool = true;
 
-static REPOSITORY_NAME : &str = "changelog2";
+static REPOSITORY_NAME : &str = "changelog";
 
 fn main() {
     let mut log_file = open_log();
