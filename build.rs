@@ -6,8 +6,6 @@ use serde::{Deserialize};
 
 static DEBUG: bool = true;
 
-static REPOSITORY_NAME : &str = "changelog";
-
 fn main() {
     let mut log_file = open_log();
     if log_file.is_none() {
@@ -37,10 +35,23 @@ fn main() {
 
         let config = read_config(&mut log_file);
         if config.is_none() {
+            let _ = std::fs::remove_dir(changelog_path.clone());
             panic!("failed to read config");
         }
  
-        let repo = "https://git.goto.ucsd.edu/".to_owned() + &config.unwrap().participant_id.to_owned() + "/" + REPOSITORY_NAME + ".git";
+        let pid = &config.as_ref().unwrap().participant_id.to_owned();
+        let project: &String = &config.as_ref().unwrap().project.to_owned();
+        let pwd = &config.unwrap().git_password.to_owned();
+
+        log(&mut log_file, "project: ");
+        log(&mut log_file, project);
+
+        if project.len() == 0 {
+            let _ = std::fs::remove_dir(changelog_path.clone());
+            panic!("Project not specified in config.json");
+        }
+
+        let repo = "https://".to_owned() + &pid + ":" + pwd + "@git.goto.ucsd.edu/" + &pid + "/" + project + ".git";
  
         Command::new("git")
                 .args(["remote", "add", "origin", &repo])
@@ -161,6 +172,7 @@ fn log(log_file: &mut Option<std::fs::File>, msg: &str) {
             Ok(_) => println!("ok"),
             Err(e) => println!("err: {}", e),
         }
+        let _ = log_file.as_mut().unwrap().sync_all();        
     }
     else {
         panic!("failed to write log");
@@ -171,26 +183,27 @@ fn log(log_file: &mut Option<std::fs::File>, msg: &str) {
 struct Config {
     participant_id: String,
     git_password: String,
+    project: String,
 }
 
 fn read_config(log_file: &mut Option<std::fs::File>) -> Option<Config> {
-       // read config.json
-       let config_file = fs::File::open("config.json");
-       if config_file.is_err() {
-           log(log_file, "failed to open config.json");
-           return None;
-       }
-       let reader = std::io::BufReader::new(config_file.unwrap());
+    // read config.json
+    let config_file = fs::File::open("config.json");
+    if config_file.is_err() {
+        log(log_file, "failed to open config.json");
+        return None;
+    }
+    let reader = std::io::BufReader::new(config_file.unwrap());
+
+    let v = serde_json::from_reader(reader);
+
+    if v.is_err() {
+        let str = std::format!("failed to parse config.json: {}", v.err().unwrap());
+        log(log_file, &str);
+        return None;
+    }
    
-       let v = serde_json::from_reader(reader);
-   
-       if v.is_err() {
-           let str = std::format!("failed to parse config.json: {}", v.err().unwrap());
-           log(log_file, &str);
-           return None;
-       }
-   
-        Some (v.unwrap())
+    Some (v.unwrap())
 }
 
 // Pushes any committed changes to the remote server.
