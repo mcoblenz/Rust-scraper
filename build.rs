@@ -79,7 +79,7 @@ fn copy_files_to_changelog(log_file: &mut Option<std::fs::File>, dir_iter: std::
 
             let dir_entry = entry.unwrap();
 
-            if !dir_entry.path().ends_with(".git") {
+            if !dir_entry.path().ends_with(".git") && !dir_entry.path().ends_with("changelog") {
                 let path = dir_entry.path();
                 let pruned_path = path.strip_prefix(manifest_path);
                 // log(log_file, pruned_path.clone().unwrap().to_str().unwrap());
