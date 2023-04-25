@@ -1,8 +1,7 @@
 use std::fs;
 use std::process::{Command};
 use std::path::{Path, PathBuf};
-use std::io::Write;
-use serde::{Deserialize};
+use std::io::{Read, Write};
 
 static DEBUG: bool = true;
 
@@ -48,8 +47,8 @@ fn main() {
 
         if project.len() == 0 {
             let _ = std::fs::remove_dir(changelog_path.clone());
-            panic!("Project not specified in config.json");
-        }
+            panic!("Project not specified in config.txt");
+        } 
 
         let repo = "https://".to_owned() + &pid + ":" + pwd + "@git.goto.ucsd.edu/" + &pid + "/" + project + ".git";
  
@@ -147,7 +146,7 @@ fn commit_to_git(log_file: &mut Option<std::fs::File>, changelog_path: &PathBuf)
         log(log_file, "failed to commit files to git");
         log(log_file, &commit.status.to_string());
     }
-}
+} 
 
 fn open_log() -> Option<std::fs::File> {
     if DEBUG {
@@ -179,7 +178,6 @@ fn log(log_file: &mut Option<std::fs::File>, msg: &str) {
     }
 }
 
-#[derive(Deserialize)]
 struct Config {
     participant_id: String,
     git_password: String,
@@ -187,24 +185,77 @@ struct Config {
 }
 
 fn read_config(log_file: &mut Option<std::fs::File>) -> Option<Config> {
-    // read config.json
-    let config_file = fs::File::open("config.json");
+    // read config.txt
+    let config_file = fs::File::open("config.txt");
     if config_file.is_err() {
-        log(log_file, "failed to open config.json");
+        log(log_file, "failed to open config.txt");
         return None;
     }
-    let reader = std::io::BufReader::new(config_file.unwrap());
 
-    let v = serde_json::from_reader(reader);
+    let mut contents = String::new();
+    let read_result = config_file.unwrap().read_to_string(&mut contents);
 
-    if v.is_err() {
-        let str = std::format!("failed to parse config.json: {}", v.err().unwrap());
+    if read_result.is_err() {
+        let str = std::format!("failed to read config.txt: {}", read_result.err().unwrap());
         log(log_file, &str);
         return None;
     }
-   
-    Some (v.unwrap())
+
+    parse_config(log_file, &contents)
 }
+
+fn parse_config(log_file: &mut Option<std::fs::File>, text: &str) -> Option<Config> {
+    let mut id = None;
+    let mut pwd: Option<&str> = None;
+    let mut proj: Option<&str> = None;
+
+    // Custom parsing logic to avoid making clients depend on serde.
+    let comma_split = text.split(',');
+
+    for elt in comma_split {
+        let assign_split: Vec<&str> = elt.split(':').collect();
+        if assign_split.len() != 2 {
+            log(log_file, "failed to parse config.txt");
+            log(log_file, &assign_split.join(":"));
+            return None; 
+        }
+
+        if assign_split[0].trim().eq("participant_id") {
+            id = Some(assign_split[1].trim());
+        } 
+        if assign_split[0].trim().eq("git_password") {
+            pwd = Some(assign_split[1].trim());
+        }
+        if assign_split[0].trim().eq("project") {
+            proj = Some(assign_split[1].trim());
+        } 
+    } 
+
+    if id.is_none(){
+        log(log_file, "failed to parse config.txt: missing participant_id");
+        None
+    } 
+    else if pwd.is_none() {
+        log(log_file, "failed to parse config.txt: missing git_password");
+        None
+    }
+    else if proj.is_none() {
+        log(log_file, "failed to parse config.txt: missing project");
+        None
+    } 
+    else {
+        // log(log_file, "participant id:");
+        // log(log_file, id.unwrap());
+        // log(log_file, "password:");
+        // log(log_file, pwd.unwrap());
+        // log(log_file, "project:");
+        // log(log_file, proj.unwrap());
+
+        Some (Config{participant_id: id.unwrap().to_owned(), git_password: pwd.unwrap().to_owned(), project: proj.unwrap().to_owned()})
+    }
+}
+
+
 
 // Pushes any committed changes to the remote server.
 fn git_push(log_file: &mut Option<std::fs::File>, changelog_path: &PathBuf) {
@@ -212,10 +263,26 @@ fn git_push(log_file: &mut Option<std::fs::File>, changelog_path: &PathBuf) {
                 .args(["push", "--set-upstream", "origin", "main"])
                 .current_dir(changelog_path)
                 .output();
-    
+     
     if push_success.is_err() {
         log(log_file, "failed to push");
         log(log_file, &push_success.err().unwrap().to_string());
     }
 
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_read_config() {
+        let text =     
+            "\"participant_id\": \"592089\",
+            \"git_password\": \"985613\",
+            \"project\":\"p1\"";
+        let mut opt: Option<std::fs::File> = None;
+        let config = parse_config(&mut opt, text);
+        assert!(config.is_some());
+    }   
 }
