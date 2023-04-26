@@ -4,6 +4,16 @@ use std::path::{Path, PathBuf};
 use std::io::{Read, Write};
 
 static DEBUG: bool = true;
+static SERVER: &str = "git.goto.ucsd.edu";
+
+/* 
+ * This build.rs file maintains an internal git repository that records every version of the code
+ * that is built. The repository is pushed to a remote repository on SERVER.
+ * 
+ * Unfortunately, there is no good way of seeing output from build.rs, since the output is sent
+ * directly to the compiler. Therefore, if the DEBUG flag is true, build.rs writes to a log file,
+ * /tmp/log.txt. This file is overwritten every time the build script is run.
+ */
 
 fn main() {
     let mut log_file = open_log();
@@ -50,14 +60,23 @@ fn main() {
             panic!("Project not specified in config.txt");
         } 
 
-        let repo = "https://".to_owned() + &pid + ":" + pwd + "@git.goto.ucsd.edu/" + &pid + "/" + project + ".git";
+        let repo = "https://".to_owned() + &pid + ":" + pwd + "@" + SERVER + "/" + &pid + "/" + project + ".git";
  
         Command::new("git")
                 .args(["remote", "add", "origin", &repo])
                 .current_dir(changelog_path.clone())
                 .output()
                 .expect("failed to execute git remote add");
- 
+
+        // Record Rust version
+        let rustc_version = Command::new("rustc")
+                                            .args(["--version"])
+                                            .current_dir(changelog_path.clone())
+                                            .output()
+                                            .expect("failed to execute rustc --version");
+        let mut rustc_version_file = fs::File::create(changelog_path.join("rustc.version")).expect("Couldn't open rustc version file");
+
+        writeln!(rustc_version_file, "{}", String::from_utf8_lossy(&rustc_version.stdout)).expect("Couldn't write rustc version file");
     }
     
     log(&mut log_file, "copying files...");
