@@ -6,6 +6,7 @@ use std::io::{Read, Write};
 static DEBUG: bool = true;
 static SERVER: &str = "git.goto.ucsd.edu";
 
+
 /* 
  * This build.rs file maintains an internal git repository that records every version of the code
  * that is built. The repository is pushed to a remote repository on SERVER.
@@ -29,9 +30,15 @@ fn main() {
         return;
     }
     
+    let changelog_path: PathBuf = Path::new(manifest_dir).join(PathBuf::from("changelog"));
+    let config: Option<Config> = read_config(&mut log_file);
+    if config.is_none() {
+        // No configuration file present. Don't do anything.
+        return;
+    }
+
     log(&mut log_file, "creating directory...");
     // Create a directory to store the changelog files
-    let changelog_path = Path::new(manifest_dir).join(PathBuf::from("changelog"));
     // Will error if the directory already exists, but that's okay; we'll just ignore it.
     let created = std::fs::create_dir(changelog_path.clone());
     if !created.is_err() {
@@ -42,12 +49,6 @@ fn main() {
                 .output()
                 .expect("failed to execute git init");
 
-        let config = read_config(&mut log_file);
-        if config.is_none() {
-            let _ = std::fs::remove_dir(changelog_path.clone());
-            panic!("failed to read config");
-        }
- 
         let pid = &config.as_ref().unwrap().participant_id.to_owned();
         let project: &String = &config.as_ref().unwrap().project.to_owned();
         let pwd = &config.unwrap().git_password.to_owned();
@@ -66,21 +67,12 @@ fn main() {
                 .args(["remote", "add", "origin", &repo])
                 .current_dir(changelog_path.clone())
                 .output()
-                .expect("failed to execute git remote add");
-
-        // Record Rust version
-        let rustc_version = Command::new("rustc")
-                                            .args(["--version"])
-                                            .current_dir(changelog_path.clone())
-                                            .output()
-                                            .expect("failed to execute rustc --version");
-        let mut rustc_version_file = fs::File::create(changelog_path.join("rustc.version")).expect("Couldn't open rustc version file");
-
-        writeln!(rustc_version_file, "{}", String::from_utf8_lossy(&rustc_version.stdout)).expect("Couldn't write rustc version file");
-    }
+                .expect("failed to execute git remote add");    }
     
     log(&mut log_file, "copying files...");
     copy_files_to_changelog(&mut log_file, dir_iter.unwrap(), &changelog_path);
+
+    write_rustc_version(&changelog_path);
 
     log(&mut log_file, "committing to git...");
     commit_to_git(&mut log_file, &changelog_path);
@@ -89,12 +81,23 @@ fn main() {
     git_push(&mut log_file, &changelog_path);
 }
 
+fn write_rustc_version(path: &PathBuf) {
+    // Record Rust version
+    let rustc_version = Command::new("rustc")
+                                        .args(["--version"])
+                                        .current_dir(path.clone())
+                                        .output()
+                                        .expect("failed to execute rustc --version");
+    let mut rustc_version_file = fs::File::create(path.join("rustc.version")).expect("Couldn't open rustc version file");
+
+    writeln!(rustc_version_file, "{}", String::from_utf8_lossy(&rustc_version.stdout)).expect("Couldn't write rustc version file");
+}
+
 fn copy_files_to_changelog(log_file: &mut Option<std::fs::File>, dir_iter: std::fs::ReadDir, changelog_path: &PathBuf) {
     let manifest_path = Path::new(env!("CARGO_MANIFEST_DIR"));
 
     for (_i, entry) in dir_iter.enumerate() {
         if entry.is_ok() {
-
             let dir_entry = entry.unwrap();
 
             if !dir_entry.path().ends_with(".git") && !dir_entry.path().ends_with("changelog") {
@@ -106,7 +109,6 @@ fn copy_files_to_changelog(log_file: &mut Option<std::fs::File>, dir_iter: std::
                                                     .current_dir(manifest_path)
                                                     .output()
                                                     .expect("failed to execute git");
-
 
                 let ignored = is_ignore.status.success();
                 if  !ignored { // file is not in .gitignore
@@ -263,13 +265,6 @@ fn parse_config(log_file: &mut Option<std::fs::File>, text: &str) -> Option<Conf
         None
     } 
     else {
-        // log(log_file, "participant id:");
-        // log(log_file, id.unwrap());
-        // log(log_file, "password:");
-        // log(log_file, pwd.unwrap());
-        // log(log_file, "project:");
-        // log(log_file, proj.unwrap());
-
         Some (Config{participant_id: id.unwrap().to_owned(), git_password: pwd.unwrap().to_owned(), project: proj.unwrap().to_owned()})
     }
 }
