@@ -276,7 +276,7 @@ fn git_push(log_file: &mut Option<std::fs::File>, changelog_path: &PathBuf) {
     let push_success = Command::new("git")
                 .args(["push", "--set-upstream", "origin", "main"])
                 .current_dir(changelog_path)
-                .output();
+                .spawn();
      
     if push_success.is_err() {
         log(log_file, "failed to push");
